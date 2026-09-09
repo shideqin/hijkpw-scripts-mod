@@ -444,10 +444,11 @@ ${AAAA_RECORDS}"
         echo "   2) 小说站(随机选择)"
         echo "   3) 美女站(https://imeizi.me)"
         echo "   4) 高清壁纸站(https://bing.imeizi.me)"
-        echo "   5) 自定义反代站点(需以http或者https开头)"
-        read -p "  请选择伪装网站类型[默认:高清壁纸站]" answer
+        echo "   5) Cloudflare(https://www.cloudflare.com)"
+        echo "   6) 自定义反代站点(需以http或者https开头)"
+        read -p "  请选择伪装网站类型[默认:Cloudflare]" answer
         if [[ -z "$answer" ]]; then
-            PROXY_URL="https://bing.imeizi.me"
+            PROXY_URL="https://www.cloudflare.com"
         else
             case $answer in
             1)
@@ -473,6 +474,9 @@ ${AAAA_RECORDS}"
                 PROXY_URL="https://bing.imeizi.me"
                 ;;
             5)
+                PROXY_URL="https://www.cloudflare.com"
+                ;;
+            6)
                 read -p " 请输入反代站点(以http或者https开头)：" PROXY_URL
                 if [[ -z "$PROXY_URL" ]]; then
                     colorEcho $RED " 请输入反代网站！"
@@ -896,7 +900,7 @@ Type=simple
 User=root
 #User=nobody
 NoNewPrivileges=true
-ExecStart=/usr/bin/v2ray/v2ray -config /etc/v2ray/config.json
+ExecStart=/usr/bin/v2ray/v2ray run -config /etc/v2ray/config.json
 Restart=on-failure
 
 [Install]
