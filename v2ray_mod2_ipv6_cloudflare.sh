@@ -43,7 +43,7 @@ if [[ $? -ne 0 || -z "$IP" ]]; then
         echo -e "${RED}无法获取服务器公网IP，请检查网络连接。${PLAIN}"
         exit 1
     fi
-    V6_PROXY="https://gh.hijk.art/"
+    V6_PROXY=""
 fi
 if [[ "$IP" == *:* ]]; then
     IPV6="true"
@@ -188,8 +188,8 @@ getVersion() {
     VER="$(/usr/bin/v2ray/v2ray -version 2>/dev/null)"
     RETVAL=$?
     CUR_VER="$(normalizeVersion "$(echo "$VER" | head -n 1 | cut -d " " -f2)")"
-    TAG_URL="${V6_PROXY}https://api.github.com/repos/v2fly/v2ray-core/releases/latest"
-    NEW_VER="$(normalizeVersion "$(curl -s "${TAG_URL}" --connect-timeout 10| tr ',' '\n' | grep 'tag_name' | cut -d\" -f4)")"
+    # IPv6-only VPS: GitHub API不可访问，固定使用稳定版本
+    NEW_VER="v5.49.0"
     if [[ "$XTLS" = "true" ]]; then
         NEW_VER=v4.32.1
     fi
@@ -862,7 +862,8 @@ installBBR() {
 installV2ray() {
     rm -rf /tmp/v2ray
     mkdir -p /tmp/v2ray
-    DOWNLOAD_LINK="${V6_PROXY}https://github.com/v2fly/v2ray-core/releases/download/${NEW_VER}/v2ray-linux-$(archAffix).zip"
+    # IPv6-only VPS: 通过 ghproxy.net 下载 GitHub Release
+    DOWNLOAD_LINK="https://ghproxy.net/https://github.com/v2fly/v2ray-core/releases/download/${NEW_VER}/v2ray-linux-$(archAffix).zip"
     colorEcho $BLUE " 下载V2Ray: ${DOWNLOAD_LINK}"
     curl -L -H "Cache-Control: no-cache" -o /tmp/v2ray/v2ray.zip ${DOWNLOAD_LINK}
     if [ $? != 0 ];then
