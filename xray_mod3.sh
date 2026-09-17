@@ -1,34 +1,34 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# Xray VLESS + REALITY + XTLS Vision 一键安装脚本
-#
-# Xray:
-#   VLESS + TCP + REALITY + xtls-rprx-vision
-#
-# Client:
-#   v2rayN / v2rayNG / sing-box 等支持 Xray Vision 的客户端
-#
-# Config:
-#   /usr/local/etc/xray/config.json
-#
-# Client information:
-#   /usr/local/etc/xray/client-info.txt
-#
-# Backup:
-#   /usr/local/etc/xray/backup/
-#
+# Xray VLESS + REALITY + XTLS Vision
+# Xray 26.x
+# Designed for v2rayN / v2rayNG
 # ============================================================
 
-set -e
+set -u
 
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_DIR="/usr/local/etc/xray"
 XRAY_CONFIG="${XRAY_DIR}/config.json"
-XRAY_INFO="${XRAY_DIR}/client-info.txt"
+XRAY_SERVICE="xray"
+
 BACKUP_DIR="${XRAY_DIR}/backup"
 
-INSTALL_SCRIPT_URL="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
+SERVER_IP=""
+UUID=""
+PRIVATE_KEY=""
+PUBLIC_KEY=""
+SHORT_ID=""
+
+DEST=""
+SERVER_NAME=""
+
+CONFIG_BACKUP=""
+
+# ------------------------------------------------------------
+# Colors
+# ------------------------------------------------------------
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,524 +37,422 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# ------------------------------------------------------------
+# Basic functions
+# ------------------------------------------------------------
 
-# ============================================================
-# 基础函数
-# ============================================================
-
-info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-success() {
-    echo -e "${GREEN}[OK]${NC} $1"
+msg() {
+    echo -e "${GREEN}[+]${NC} $*"
 }
 
 warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    echo -e "${YELLOW}[!]${NC} $*"
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[-]${NC} $*"
 }
 
-die() {
-    error "$1"
-    exit 1
+info() {
+    echo -e "${CYAN}[*]${NC} $*"
 }
 
-pause_enter() {
+pause() {
     echo
-    read -rp "按 Enter 继续..."
+    read -r -p "按 Enter 返回菜单..." _
 }
 
-
-# ============================================================
-# Root
-# ============================================================
-
-check_root() {
-
+require_root() {
     if [ "$(id -u)" != "0" ]; then
-        die "请使用 root 用户运行此脚本"
+        error "请使用 root 用户运行此脚本。"
+        exit 1
     fi
 }
 
+# ------------------------------------------------------------
+# Detect OS
+# ------------------------------------------------------------
 
-# ============================================================
-# OS
-# ============================================================
-
-check_os() {
-
-    if [ ! -f /etc/os-release ]; then
-        die "无法识别操作系统"
-    fi
-
-    . /etc/os-release
-
-    info "操作系统：${PRETTY_NAME}"
-
-    case "${ID}" in
-        debian|ubuntu|centos|rocky|almalinux|fedora)
-            ;;
-        *)
-            warn "当前系统 ${ID} 未经过充分测试"
-
-            read -rp "是否继续？[y/N]: " answer
-
-            if [[ ! "$answer" =~ ^[Yy]$ ]]; then
-                exit 0
-            fi
-            ;;
-    esac
-}
-
-
-# ============================================================
-# 依赖
-# ============================================================
-
-check_commands() {
-
-    local missing=""
-
-    for cmd in curl openssl sed grep awk; do
-
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing="${missing} ${cmd}"
-        fi
-
-    done
-
-    if [ -n "$missing" ]; then
-
-        warn "缺少命令：${missing}"
-
-        if command -v apt-get >/dev/null 2>&1; then
-
-            export DEBIAN_FRONTEND=noninteractive
-
-            apt-get update
-
-            apt-get install -y \
-                curl \
-                openssl \
-                ca-certificates \
-                sed \
-                grep \
-                gawk
-
-        elif command -v dnf >/dev/null 2>&1; then
-
-            dnf install -y \
-                curl \
-                openssl \
-                ca-certificates \
-                sed \
-                grep \
-                gawk
-
-        elif command -v yum >/dev/null 2>&1; then
-
-            yum install -y \
-                curl \
-                openssl \
-                ca-certificates \
-                sed \
-                grep \
-                gawk
-
-        else
-            die "无法自动安装依赖"
-        fi
-    fi
-}
-
-
-# ============================================================
-# 备份旧配置
-# ============================================================
-
-backup_config() {
-
-    if [ -f "$XRAY_CONFIG" ]; then
-
-        mkdir -p "$BACKUP_DIR"
-
-        local backup_file
-
-        backup_file="${BACKUP_DIR}/config-$(date +%Y%m%d-%H%M%S).json"
-
-        cp "$XRAY_CONFIG" "$backup_file"
-
-        chmod 600 "$backup_file"
-
-        success "旧配置已备份：${backup_file}"
-    fi
-}
-
-
-# ============================================================
-# 安装 / 更新 Xray
-# ============================================================
-
-install_xray() {
-
-    info "检查 Xray..."
-
-    if [ -x "$XRAY_BIN" ]; then
-
-        echo
-
-        "$XRAY_BIN" version 2>/dev/null | head -n 2 || true
-
-        echo
-
-        read -rp "检测到已有 Xray，是否更新/重新安装？[Y/n]: " answer
-
-        if [[ "$answer" =~ ^[Nn]$ ]]; then
-            return
-        fi
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS="${ID:-unknown}"
+        VERSION="${VERSION_ID:-unknown}"
     else
-
-        info "未检测到 Xray，开始安装..."
+        OS="unknown"
+        VERSION="unknown"
     fi
 
-    bash -c "$(curl -fsSL "$INSTALL_SCRIPT_URL")" @ install
-
-    if [ ! -x "$XRAY_BIN" ]; then
-        die "Xray 安装失败"
-    fi
-
-    success "Xray 安装完成"
-
-    echo
-
-    "$XRAY_BIN" version || true
+    info "系统: ${OS} ${VERSION}"
 }
 
+# ------------------------------------------------------------
+# Dependencies
+# ------------------------------------------------------------
 
-# ============================================================
-# UUID
-# ============================================================
+install_dependencies() {
 
-generate_uuid() {
+    command -v curl >/dev/null 2>&1 && return 0
 
-    local uuid
+    info "未检测到 curl，正在安装..."
 
-    uuid="$("$XRAY_BIN" uuid 2>/dev/null || true)"
+    if command -v apt-get >/dev/null 2>&1; then
 
-    if [ -z "$uuid" ]; then
+        apt-get update -y
+        apt-get install -y curl ca-certificates unzip
 
-        if command -v uuidgen >/dev/null 2>&1; then
-            uuid="$(uuidgen)"
-        else
-            die "UUID 生成失败"
-        fi
+    elif command -v dnf >/dev/null 2>&1; then
 
+        dnf install -y curl ca-certificates unzip
+
+    elif command -v yum >/dev/null 2>&1; then
+
+        yum install -y curl ca-certificates unzip
+
+    elif command -v apk >/dev/null 2>&1; then
+
+        apk add curl ca-certificates unzip
+
+    else
+        error "无法自动安装依赖，请手动安装 curl、ca-certificates、unzip。"
+        exit 1
     fi
-
-    echo "$uuid"
 }
 
-
-# ============================================================
-# Reality X25519
-#
-# Xray 26.x 输出：
-#
-# PrivateKey: xxx
-# Password (PublicKey): xxx
-# Hash32: xxx
-#
-# ============================================================
-
-generate_reality_keys() {
-
-    local result
-
-    info "生成 Reality X25519 密钥..."
-
-    result="$("$XRAY_BIN" x25519 2>&1)"
-
-    echo
-    echo "$result"
-    echo
-
-    # --------------------------------------------------------
-    # Xray 26.x
-    # --------------------------------------------------------
-
-    REALITY_PRIVATE_KEY="$(
-        echo "$result" |
-        awk -F': ' '/^PrivateKey:/ {
-            print $2
-            exit
-        }'
-    )"
-
-    REALITY_PUBLIC_KEY="$(
-        echo "$result" |
-        awk -F': ' '/^Password \(PublicKey\):/ {
-            print $2
-            exit
-        }'
-    )"
-
-    # --------------------------------------------------------
-    # 兼容其它 Xray 输出
-    # --------------------------------------------------------
-
-    if [ -z "$REALITY_PRIVATE_KEY" ]; then
-
-        REALITY_PRIVATE_KEY="$(
-            echo "$result" |
-            awk -F': ' '/^Private key:/ {
-                print $2
-                exit
-            }'
-        )"
-
-    fi
-
-    if [ -z "$REALITY_PUBLIC_KEY" ]; then
-
-        REALITY_PUBLIC_KEY="$(
-            echo "$result" |
-            awk -F': ' '/^Public key:/ {
-                print $2
-                exit
-            }'
-
-        )"
-
-    fi
-
-    if [ -z "$REALITY_PUBLIC_KEY" ]; then
-
-        REALITY_PUBLIC_KEY="$(
-            echo "$result" |
-            awk -F': ' '/^Password:/ {
-                print $2
-                exit
-            }'
-        )"
-
-    fi
-
-    # --------------------------------------------------------
-    # 检查
-    # --------------------------------------------------------
-
-    if [ -z "$REALITY_PRIVATE_KEY" ]; then
-        die "无法解析 Reality PrivateKey"
-    fi
-
-    if [ -z "$REALITY_PUBLIC_KEY" ]; then
-        die "无法解析 Reality PublicKey"
-    fi
-
-    success "Reality 密钥生成成功"
-
-    echo
-    echo "PrivateKey:"
-    echo "$REALITY_PRIVATE_KEY"
-
-    echo
-
-    echo "PublicKey:"
-    echo "$REALITY_PUBLIC_KEY"
-}
-
-
-# ============================================================
-# Short ID
-# ============================================================
-
-generate_short_id() {
-
-    SHORT_ID="$(openssl rand -hex 8)"
-
-    if [ -z "$SHORT_ID" ]; then
-        die "ShortID 生成失败"
-    fi
-
-    success "Reality ShortID：${SHORT_ID}"
-}
-
-
-# ============================================================
-# 获取服务器 IPv4
-# ============================================================
+# ------------------------------------------------------------
+# Get server IPv4
+# ------------------------------------------------------------
 
 get_server_ip() {
 
     SERVER_IP=""
 
-    info "获取服务器公网 IPv4..."
+    # First try route based detection
+    if command -v ip >/dev/null 2>&1; then
 
-    SERVER_IP="$(
-        curl -4 -fsS \
-        --connect-timeout 5 \
-        --max-time 10 \
-        https://api.ipify.org \
-        2>/dev/null || true
-    )"
-
-    if [ -z "$SERVER_IP" ]; then
-
-        SERVER_IP="$(
-            curl -4 -fsS \
-            --connect-timeout 5 \
-            --max-time 10 \
-            https://ifconfig.me \
-            2>/dev/null || true
-        )"
+        SERVER_IP=$(ip route get 1.1.1.1 2>/dev/null \
+            | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')
 
     fi
 
+    # Public IP fallback
     if [ -z "$SERVER_IP" ]; then
-
-        SERVER_IP="$(
-            hostname -I 2>/dev/null |
-            awk '{print $1}'
-        )"
-
+        SERVER_IP=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
     fi
 
     if [ -z "$SERVER_IP" ]; then
-
-        warn "无法自动获取服务器 IP"
-
-        read -rp "请输入服务器 IP 或域名： " SERVER_IP
-
+        SERVER_IP=$(curl -4 -fsS --max-time 5 https://ifconfig.me 2>/dev/null || true)
     fi
 
     if [ -z "$SERVER_IP" ]; then
-        die "服务器 IP 不能为空"
+        error "无法自动获取服务器 IPv4。"
+        read -r -p "请输入服务器 IPv4: " SERVER_IP
+    fi
+
+    msg "服务器 IPv4: ${SERVER_IP}"
+}
+
+# ------------------------------------------------------------
+# Check port 443
+# ------------------------------------------------------------
+
+check_port_443() {
+
+    info "检查 TCP 443 端口..."
+
+    if ! command -v ss >/dev/null 2>&1; then
+        warn "系统没有 ss，跳过端口检查。"
+        return 0
+    fi
+
+    PORT_INFO=$(ss -lntp 2>/dev/null | awk '$4 ~ /:443$/')
+
+    if [ -z "$PORT_INFO" ]; then
+        msg "443 端口目前没有监听。"
+        return 0
+    fi
+
+    echo
+    echo "$PORT_INFO"
+    echo
+
+    # If Xray itself occupies 443, we can stop it during installation.
+    if echo "$PORT_INFO" | grep -q "xray"; then
+        warn "443 当前由 Xray 占用。"
+        return 0
+    fi
+
+    error "443 已被其他程序占用。"
+    error "REALITY 需要监听 443，请先处理上面的进程。"
+
+    return 1
+}
+
+# ------------------------------------------------------------
+# Stop Xray
+# ------------------------------------------------------------
+
+stop_xray() {
+
+    if systemctl list-unit-files 2>/dev/null | grep -q '^xray.service'; then
+        systemctl stop xray >/dev/null 2>&1 || true
+    fi
+
+    pkill -x xray >/dev/null 2>&1 || true
+
+    sleep 1
+}
+
+# ------------------------------------------------------------
+# Install / Update Xray
+# ------------------------------------------------------------
+
+install_xray_binary() {
+
+    info "安装 / 更新 Xray..."
+
+    install_dependencies
+
+    # Official Xray installer
+    bash <(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh)
+
+    if [ ! -x "$XRAY_BIN" ]; then
+        error "Xray 安装失败：${XRAY_BIN} 不存在。"
+        return 1
+    fi
+
+    msg "Xray 安装成功："
+
+    "$XRAY_BIN" version | head -n 1
+
+    return 0
+}
+
+# ------------------------------------------------------------
+# Backup current config
+# ------------------------------------------------------------
+
+backup_config() {
+
+    mkdir -p "$BACKUP_DIR"
+
+    if [ -f "$XRAY_CONFIG" ]; then
+
+        CONFIG_BACKUP="${BACKUP_DIR}/config.$(date +%Y%m%d_%H%M%S).json"
+
+        cp -a "$XRAY_CONFIG" "$CONFIG_BACKUP"
+
+        msg "旧配置已备份："
+        echo "    $CONFIG_BACKUP"
     fi
 }
 
+# ------------------------------------------------------------
+# Generate UUID
+# ------------------------------------------------------------
 
-# ============================================================
-# 端口
-# ============================================================
+generate_uuid() {
 
-input_port() {
+    UUID=""
 
-    echo
+    UUID=$("$XRAY_BIN" uuid 2>/dev/null || true)
 
-    read -rp "VLESS 端口 [443]: " XRAY_PORT
-
-    XRAY_PORT="${XRAY_PORT:-443}"
-
-    if ! [[ "$XRAY_PORT" =~ ^[0-9]+$ ]]; then
-        die "端口必须是数字"
+    if [ -z "$UUID" ]; then
+        error "UUID 生成失败。"
+        return 1
     fi
 
-    if [ "$XRAY_PORT" -lt 1 ] || [ "$XRAY_PORT" -gt 65535 ]; then
-        die "端口范围必须是 1-65535"
-    fi
+    msg "UUID: ${UUID}"
 }
 
+# ------------------------------------------------------------
+# Generate REALITY X25519 keys
+# ------------------------------------------------------------
 
-# ============================================================
-# Reality Destination
-# ============================================================
+generate_reality_keys() {
 
-input_reality_dest() {
+    info "生成 REALITY X25519 密钥..."
+
+    local result=""
+
+    result=$("$XRAY_BIN" x25519 2>/dev/null || true)
+
+    if [ -z "$result" ]; then
+        error "xray x25519 执行失败。"
+        return 1
+    fi
 
     echo
+    echo "$result"
+    echo
 
+    # Xray 26.x:
+    #
+    # PrivateKey: xxxxx
+    # Password (PublicKey): xxxxx
+    #
+    PRIVATE_KEY=$(printf '%s\n' "$result" \
+        | sed -n 's/^PrivateKey:[[:space:]]*//p' \
+        | head -n 1)
+
+    PUBLIC_KEY=$(printf '%s\n' "$result" \
+        | sed -n 's/^Password (PublicKey):[[:space:]]*//p' \
+        | head -n 1)
+
+    # Compatibility with older Xray output
+    if [ -z "$PUBLIC_KEY" ]; then
+
+        PUBLIC_KEY=$(printf '%s\n' "$result" \
+            | sed -n 's/^PublicKey:[[:space:]]*//p' \
+            | head -n 1)
+    fi
+
+    if [ -z "$PUBLIC_KEY" ]; then
+
+        PUBLIC_KEY=$(printf '%s\n' "$result" \
+            | sed -n 's/^Password:[[:space:]]*//p' \
+            | head -n 1)
+    fi
+
+    if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
+
+        error "无法解析 X25519 密钥。"
+        error "Xray 输出："
+        echo "$result"
+
+        return 1
+    fi
+
+    msg "REALITY PrivateKey: ${PRIVATE_KEY}"
+    msg "REALITY PublicKey : ${PUBLIC_KEY}"
+}
+
+# ------------------------------------------------------------
+# Generate Short ID
+# ------------------------------------------------------------
+
+generate_short_id() {
+
+    if command -v openssl >/dev/null 2>&1; then
+
+        SHORT_ID=$(openssl rand -hex 8)
+
+    else
+
+        SHORT_ID=$(od -An -N8 -tx1 /dev/urandom \
+            | tr -d ' \n')
+    fi
+
+    if [ -z "$SHORT_ID" ]; then
+        error "shortId 生成失败。"
+        return 1
+    fi
+
+    msg "Short ID: ${SHORT_ID}"
+}
+
+# ------------------------------------------------------------
+# Select REALITY target
+# ------------------------------------------------------------
+
+select_reality_target() {
+
+    echo
     echo "============================================================"
-    echo "Reality 目标站点"
+    echo " REALITY 伪装站点"
     echo "============================================================"
     echo
-
-    echo "例如："
-    echo "  www.cloudflare.com:443"
-    echo "  www.microsoft.com:443"
-    echo "  www.yahoo.com:443"
+    echo "默认使用：speed.cloudflare.com:443"
+    echo
+    echo "要求目标站点支持 TLS 1.3 / HTTP2。"
+    echo
+    echo "1. speed.cloudflare.com:443"
+    echo "2. www.cloudflare.com:443"
+    echo "3. 自定义"
     echo
 
-    echo "建议选择："
-    echo "  - 支持 TLS 1.3"
-    echo "  - 证书正常"
-    echo "  - serverName 与证书匹配"
-    echo
+    read -r -p "请选择 [1-3，默认 1]: " choice
 
-    read -rp \
-        "Reality 目标站点 [www.cloudflare.com:443]: " \
-        REALITY_DEST
+    case "$choice" in
 
-    REALITY_DEST="${REALITY_DEST:-www.cloudflare.com:443}"
+        2)
+            DEST="www.cloudflare.com:443"
+            SERVER_NAME="www.cloudflare.com"
+            ;;
 
-    # 如果用户只输入域名，自动添加 :443
-    if [[ "$REALITY_DEST" != *:* ]]; then
-        REALITY_DEST="${REALITY_DEST}:443"
-    fi
+        3)
+            read -r -p "请输入 REALITY Target，例如 example.com:443: " DEST
 
-    REALITY_SERVER_NAME="${REALITY_DEST%%:*}"
+            if [ -z "$DEST" ]; then
+                error "Target 不能为空。"
+                return 1
+            fi
 
-    if [ -z "$REALITY_SERVER_NAME" ]; then
-        die "无法解析 Reality serverName"
-    fi
+            SERVER_NAME="${DEST%%:*}"
+
+            if [ -z "$SERVER_NAME" ]; then
+                error "无法解析 serverName。"
+                return 1
+            fi
+            ;;
+
+        *)
+            DEST="speed.cloudflare.com:443"
+            SERVER_NAME="speed.cloudflare.com"
+            ;;
+    esac
+
+    msg "REALITY Target : ${DEST}"
+    msg "REALITY SNI    : ${SERVER_NAME}"
 }
 
+# ------------------------------------------------------------
+# Fix Xray permissions
+# ------------------------------------------------------------
 
-# ============================================================
-# SNI
-# ============================================================
+fix_xray_permissions() {
 
-input_server_name() {
-
-    echo
-
-    read -rp \
-        "Reality SNI [${REALITY_SERVER_NAME}]: " \
-        REALITY_SNI
-
-    REALITY_SNI="${REALITY_SNI:-$REALITY_SERVER_NAME}"
-}
-
-
-# ============================================================
-# Fingerprint
-# ============================================================
-
-input_fingerprint() {
-
-    echo
-
-    echo "客户端指纹："
-    echo "  chrome"
-    echo "  firefox"
-    echo "  safari"
-    echo "  edge"
-    echo "  ios"
-    echo "  android"
-    echo
-
-    read -rp "客户端指纹 [chrome]: " FINGERPRINT
-
-    FINGERPRINT="${FINGERPRINT:-chrome}"
-}
-
-
-# ============================================================
-# 生成服务端配置
-# ============================================================
-
-create_config() {
+    info "修复 Xray 配置目录权限..."
 
     mkdir -p "$XRAY_DIR"
 
-    backup_config
+    # Directory must be searchable by the Xray service user.
+    chown root:root "$XRAY_DIR"
+    chmod 755 "$XRAY_DIR"
+
+    if [ -f "$XRAY_CONFIG" ]; then
+
+        chown root:root "$XRAY_CONFIG"
+        chmod 644 "$XRAY_CONFIG"
+
+    fi
+
+    # Ensure parent directories are searchable.
+    chmod 755 /usr/local 2>/dev/null || true
+
+    echo
+    echo "配置目录："
+    ls -ld "$XRAY_DIR"
+
+    echo
+    echo "配置文件："
+    ls -l "$XRAY_CONFIG"
+    echo
+}
+
+# ------------------------------------------------------------
+# Write config
+# ------------------------------------------------------------
+
+write_config() {
 
     info "生成 Xray 配置..."
 
-    cat > "$XRAY_CONFIG" <<EOF
+    mkdir -p "$XRAY_DIR"
+
+    local tmp_config="${XRAY_CONFIG}.tmp"
+
+    cat > "$tmp_config" <<EOF
 {
   "log": {
     "loglevel": "warning"
@@ -563,8 +461,7 @@ create_config() {
   "inbounds": [
     {
       "listen": "0.0.0.0",
-      "port": ${XRAY_PORT},
-
+      "port": 443,
       "protocol": "vless",
 
       "settings": {
@@ -574,27 +471,23 @@ create_config() {
             "flow": "xtls-rprx-vision"
           }
         ],
-
         "decryption": "none"
       },
 
       "streamSettings": {
         "network": "raw",
-
         "security": "reality",
 
         "realitySettings": {
           "show": false,
-
-          "dest": "${REALITY_DEST}",
-
+          "target": "${DEST}",
           "xver": 0,
 
           "serverNames": [
-            "${REALITY_SNI}"
+            "${SERVER_NAME}"
           ],
 
-          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "privateKey": "${PRIVATE_KEY}",
 
           "shortIds": [
             "${SHORT_ID}"
@@ -604,13 +497,11 @@ create_config() {
 
       "sniffing": {
         "enabled": true,
-
         "destOverride": [
           "http",
           "tls",
           "quic"
         ],
-
         "routeOnly": true
       }
     }
@@ -620,147 +511,81 @@ create_config() {
     {
       "protocol": "freedom",
       "tag": "direct"
-    },
-
-    {
-      "protocol": "blackhole",
-      "tag": "block"
     }
   ]
 }
 EOF
 
-    chmod 600 "$XRAY_CONFIG"
+    if [ ! -s "$tmp_config" ]; then
+        error "配置文件生成失败。"
+        rm -f "$tmp_config"
+        return 1
+    fi
 
-    success "配置已生成：${XRAY_CONFIG}"
+    # Validate JSON syntax
+    if command -v python3 >/dev/null 2>&1; then
+
+        if ! python3 -m json.tool "$tmp_config" >/dev/null 2>&1; then
+            error "JSON 格式错误。"
+            rm -f "$tmp_config"
+            return 1
+        fi
+
+    fi
+
+    mv -f "$tmp_config" "$XRAY_CONFIG"
+
+    fix_xray_permissions
+
+    msg "配置文件生成完成。"
 }
 
-
-# ============================================================
-# 配置测试
-# ============================================================
+# ------------------------------------------------------------
+# Test config
+# ------------------------------------------------------------
 
 test_config() {
 
+    info "测试 Xray 配置..."
+
+    fix_xray_permissions
+
     echo
+    echo "------------------------------------------------------------"
 
-    info "检查 Xray 配置..."
+    if "$XRAY_BIN" run -test -config "$XRAY_CONFIG"; then
 
-    if "$XRAY_BIN" run \
-        -test \
-        -config "$XRAY_CONFIG"; then
+        echo "------------------------------------------------------------"
+        msg "Xray 配置测试通过。"
+        echo
 
-        success "Xray 配置检查通过"
+        return 0
 
     else
 
-        die "Xray 配置检查失败，请检查 ${XRAY_CONFIG}"
+        echo "------------------------------------------------------------"
+        error "Xray 配置测试失败。"
+        echo
+        error "请检查上面的错误信息。"
+        echo
+
+        return 1
     fi
 }
 
+# ------------------------------------------------------------
+# Start service
+# ------------------------------------------------------------
 
-# ============================================================
-# 防火墙
-# ============================================================
-
-configure_firewall() {
-
-    echo
-
-    echo "============================================================"
-    echo "配置防火墙"
-    echo "============================================================"
-
-    # --------------------------------------------------------
-    # UFW
-    # --------------------------------------------------------
-
-    if command -v ufw >/dev/null 2>&1; then
-
-        if ufw status 2>/dev/null | grep -q "Status: active"; then
-
-            info "检测到 UFW"
-
-            ufw allow "${XRAY_PORT}/tcp" >/dev/null || true
-
-            success "UFW 已开放 TCP ${XRAY_PORT}"
-
-            return
-        fi
-    fi
-
-    # --------------------------------------------------------
-    # firewalld
-    # --------------------------------------------------------
-
-    if command -v firewall-cmd >/dev/null 2>&1; then
-
-        if firewall-cmd --state >/dev/null 2>&1; then
-
-            info "检测到 firewalld"
-
-            firewall-cmd \
-                --permanent \
-                --add-port="${XRAY_PORT}/tcp" \
-                >/dev/null || true
-
-            firewall-cmd \
-                --reload \
-                >/dev/null || true
-
-            success "firewalld 已开放 TCP ${XRAY_PORT}"
-
-            return
-        fi
-    fi
-
-    # --------------------------------------------------------
-    # iptables
-    # --------------------------------------------------------
-
-    if command -v iptables >/dev/null 2>&1; then
-
-        info "检测到 iptables"
-
-        if ! iptables \
-            -C INPUT \
-            -p tcp \
-            --dport "$XRAY_PORT" \
-            -j ACCEPT \
-            >/dev/null 2>&1; then
-
-            iptables \
-                -I INPUT \
-                -p tcp \
-                --dport "$XRAY_PORT" \
-                -j ACCEPT \
-                || true
-        fi
-
-        success "iptables 已开放 TCP ${XRAY_PORT}"
-
-        return
-    fi
-
-    warn "未检测到可自动配置的防火墙"
-}
-
-
-# ============================================================
-# Xray 服务
-# ============================================================
-
-restart_xray() {
+start_xray() {
 
     info "重新加载 systemd..."
 
     systemctl daemon-reload
 
-    info "设置 Xray 开机启动..."
+    info "启动 Xray..."
 
     systemctl enable xray >/dev/null 2>&1 || true
-
-    info "启动 Xray..."
 
     systemctl restart xray
 
@@ -768,638 +593,536 @@ restart_xray() {
 
     if systemctl is-active --quiet xray; then
 
-        success "Xray 已正常运行"
+        msg "Xray 启动成功。"
 
-    else
+        return 0
+    fi
 
-        error "Xray 启动失败"
+    error "Xray 启动失败。"
 
-        echo
+    echo
+    systemctl status xray --no-pager -l || true
 
-        systemctl status \
-            xray \
-            --no-pager \
-            -l || true
+    echo
+    error "最近日志："
 
-        echo
+    journalctl -u xray -n 50 --no-pager || true
 
-        echo "最近日志："
+    return 1
+}
 
-        journalctl \
-            -u xray \
-            -n 50 \
-            --no-pager || true
+# ------------------------------------------------------------
+# Check port
+# ------------------------------------------------------------
 
-        exit 1
+check_xray_port() {
+
+    echo
+    info "检查 Xray 443 监听..."
+
+    if command -v ss >/dev/null 2>&1; then
+
+        ss -lntp 2>/dev/null | grep -E ':443[[:space:]]' || true
+
     fi
 }
 
+# ------------------------------------------------------------
+# Generate v2rayN URL
+# ------------------------------------------------------------
 
-# ============================================================
-# 生成 VLESS URL
-# ============================================================
+generate_vless_url() {
 
-generate_vless_link() {
+    local remark="VLESS-REALITY-Vision"
 
-    # SNI URL 编码
-    ENCODED_SNI="$(
-        printf '%s' "$REALITY_SNI" |
-        sed 's/:/%3A/g'
-    )"
+    local encoded_remark=""
 
-    VLESS_LINK="vless://${UUID}@${SERVER_IP}:${XRAY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${ENCODED_SNI}&fp=${FINGERPRINT}&pbk=${REALITY_PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Xray-Vision-REALITY"
+    if command -v python3 >/dev/null 2>&1; then
+
+        encoded_remark=$(python3 - "$remark" <<'PY'
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1], safe=''))
+PY
+)
+
+    else
+
+        encoded_remark="$remark"
+    fi
+
+    echo
+    echo "============================================================"
+    echo " v2rayN / v2rayNG VLESS + REALITY"
+    echo "============================================================"
+    echo
+
+    echo "服务器地址:"
+    echo "$SERVER_IP"
+
+    echo
+    echo "端口:"
+    echo "443"
+
+    echo
+    echo "UUID:"
+    echo "$UUID"
+
+    echo
+    echo "Flow:"
+    echo "xtls-rprx-vision"
+
+    echo
+    echo "SNI:"
+    echo "$SERVER_NAME"
+
+    echo
+    echo "Public Key:"
+    echo "$PUBLIC_KEY"
+
+    echo
+    echo "Short ID:"
+    echo "$SHORT_ID"
+
+    echo
+    echo "Fingerprint:"
+    echo "chrome"
+
+    echo
+    echo "------------------------------------------------------------"
+    echo "VLESS URL:"
+    echo
+
+    echo "vless://${UUID}@${SERVER_IP}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#${encoded_remark}"
+
+    echo
+    echo "============================================================"
 }
 
+# ------------------------------------------------------------
+# Save client info
+# ------------------------------------------------------------
 
-# ============================================================
-# 保存客户端信息
-# ============================================================
+save_client_info() {
 
-save_info() {
+    local info_file="${XRAY_DIR}/client-info.txt"
 
-    cat > "$XRAY_INFO" <<EOF
-============================================================
+    cat > "$info_file" <<EOF
 Xray VLESS + REALITY + XTLS Vision
-============================================================
+==================================
 
-Server IP:
+Server:
 ${SERVER_IP}
 
 Port:
-${XRAY_PORT}
-
-Protocol:
-VLESS
-
-Transport:
-TCP / RAW
-
-Security:
-REALITY
-
-Flow:
-xtls-rprx-vision
+443
 
 UUID:
 ${UUID}
 
-Reality PrivateKey:
-${REALITY_PRIVATE_KEY}
+Flow:
+xtls-rprx-vision
 
-Reality PublicKey:
-${REALITY_PUBLIC_KEY}
+Reality Target:
+${DEST}
 
-Reality ShortID:
+SNI:
+${SERVER_NAME}
+
+PublicKey:
+${PUBLIC_KEY}
+
+PrivateKey:
+${PRIVATE_KEY}
+
+ShortID:
 ${SHORT_ID}
 
-Reality Destination:
-${REALITY_DEST}
-
-Reality SNI:
-${REALITY_SNI}
-
 Fingerprint:
-${FINGERPRINT}
+chrome
 
-------------------------------------------------------------
-VLESS URL
-------------------------------------------------------------
-
-${VLESS_LINK}
-
-============================================================
+VLESS URL:
+vless://${UUID}@${SERVER_IP}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#VLESS-REALITY-Vision
 EOF
 
-    chmod 600 "$XRAY_INFO"
+    chown root:root "$info_file"
+    chmod 600 "$info_file"
 
-    success "客户端信息已保存：${XRAY_INFO}"
+    msg "客户端参数已保存："
+    echo "    $info_file"
 }
 
+# ------------------------------------------------------------
+# Install complete
+# ------------------------------------------------------------
 
-# ============================================================
-# 显示安装结果
-# ============================================================
+install_complete() {
 
-show_result() {
-
-    echo
     echo
     echo "============================================================"
-    echo -e "${GREEN}       Xray VLESS + REALITY + Vision 安装完成${NC}"
+    echo " 开始安装 VLESS + REALITY + XTLS Vision"
     echo "============================================================"
-
     echo
 
-    echo -e "${CYAN}服务器 IP:${NC}"
-    echo "  ${SERVER_IP}"
+    detect_os
+
+    get_server_ip
+
+    # Stop existing Xray before checking 443.
+    stop_xray
+
+    if ! check_port_443; then
+        error "请先处理 443 端口占用。"
+        return 1
+    fi
+
+    if ! install_xray_binary; then
+        return 1
+    fi
+
+    backup_config
+
+    if ! generate_uuid; then
+        return 1
+    fi
+
+    if ! generate_reality_keys; then
+        return 1
+    fi
+
+    if ! generate_short_id; then
+        return 1
+    fi
+
+    if ! select_reality_target; then
+        return 1
+    fi
+
+    if ! write_config; then
+        return 1
+    fi
+
+    if ! test_config; then
+
+        error "配置测试失败，不启动 Xray。"
+
+        if [ -n "$CONFIG_BACKUP" ] && [ -f "$CONFIG_BACKUP" ]; then
+            warn "旧配置仍然保留："
+            echo "    $CONFIG_BACKUP"
+        fi
+
+        return 1
+    fi
+
+    if ! start_xray; then
+        return 1
+    fi
+
+    check_xray_port
+
+    save_client_info
+
+    generate_vless_url
 
     echo
-
-    echo -e "${CYAN}端口:${NC}"
-    echo "  ${XRAY_PORT}"
-
-    echo
-
-    echo -e "${CYAN}协议:${NC}"
-    echo "  VLESS"
-
-    echo
-
-    echo -e "${CYAN}传输:${NC}"
-    echo "  TCP / RAW"
-
-    echo
-
-    echo -e "${CYAN}安全:${NC}"
-    echo "  REALITY"
-
-    echo
-
-    echo -e "${CYAN}Flow:${NC}"
-    echo "  xtls-rprx-vision"
-
-    echo
-
-    echo -e "${CYAN}UUID:${NC}"
-    echo "  ${UUID}"
-
-    echo
-
-    echo -e "${CYAN}Reality PublicKey:${NC}"
-    echo "  ${REALITY_PUBLIC_KEY}"
-
-    echo
-
-    echo -e "${CYAN}Reality ShortID:${NC}"
-    echo "  ${SHORT_ID}"
-
-    echo
-
-    echo -e "${CYAN}Reality SNI:${NC}"
-    echo "  ${REALITY_SNI}"
-
-    echo
-
-    echo -e "${CYAN}Fingerprint:${NC}"
-    echo "  ${FINGERPRINT}"
-
-    echo
-
     echo "============================================================"
-    echo -e "${GREEN}v2rayN 导入链接${NC}"
+    msg "安装完成！"
     echo "============================================================"
-
-    echo
-
-    echo "$VLESS_LINK"
-
-    echo
-
-    echo "============================================================"
-
-    echo
-
-    echo "服务端配置："
-    echo "  ${XRAY_CONFIG}"
-
-    echo
-
-    echo "客户端参数："
-    echo "  ${XRAY_INFO}"
-
     echo
 }
 
-
-# ============================================================
-# 状态
-# ============================================================
+# ------------------------------------------------------------
+# Show status
+# ------------------------------------------------------------
 
 show_status() {
 
     echo
-
     echo "============================================================"
-    echo "Xray 状态"
+    echo " Xray 状态"
     echo "============================================================"
-
     echo
 
-    systemctl status \
-        xray \
-        --no-pager \
-        -l || true
+    systemctl status xray --no-pager -l || true
 
     echo
-
     echo "监听端口："
 
-    if command -v ss >/dev/null 2>&1; then
+    ss -lntp 2>/dev/null | grep -E ':443[[:space:]]' || true
 
-        ss -lntp |
-            grep ":${XRAY_PORT}" ||
-            true
-
-    elif command -v netstat >/dev/null 2>&1; then
-
-        netstat -lntp |
-            grep ":${XRAY_PORT}" ||
-            true
-    fi
+    pause
 }
 
-
-# ============================================================
-# 查看配置
-# ============================================================
+# ------------------------------------------------------------
+# Show config
+# ------------------------------------------------------------
 
 show_config() {
 
+    echo
+    echo "============================================================"
+    echo " Xray 配置"
+    echo "============================================================"
+    echo
+
     if [ ! -f "$XRAY_CONFIG" ]; then
+        error "配置文件不存在：$XRAY_CONFIG"
+    else
+        cat "$XRAY_CONFIG"
+    fi
 
-        warn "配置文件不存在"
+    pause
+}
 
+# ------------------------------------------------------------
+# Show client info
+# ------------------------------------------------------------
+
+show_client() {
+
+    echo
+    echo "============================================================"
+    echo " 客户端参数"
+    echo "============================================================"
+
+    if [ -f "${XRAY_DIR}/client-info.txt" ]; then
+
+        cat "${XRAY_DIR}/client-info.txt"
+
+    else
+
+        warn "client-info.txt 不存在。"
+
+        if [ -n "$UUID" ] && [ -n "$PUBLIC_KEY" ]; then
+            generate_vless_url
+        fi
+    fi
+
+    pause
+}
+
+# ------------------------------------------------------------
+# Show logs
+# ------------------------------------------------------------
+
+show_logs() {
+
+    echo
+    echo "============================================================"
+    echo " Xray 最近日志"
+    echo "============================================================"
+    echo
+
+    journalctl -u xray -n 100 --no-pager
+
+    pause
+}
+
+# ------------------------------------------------------------
+# Restart
+# ------------------------------------------------------------
+
+restart_xray() {
+
+    fix_xray_permissions
+
+    echo
+
+    if ! test_config; then
+        error "配置测试失败，不执行重启。"
+        pause
         return
     fi
 
-    echo
+    systemctl restart xray
 
-    echo "============================================================"
-    echo "Xray 配置"
-    echo "============================================================"
+    sleep 2
 
-    echo
-
-    cat "$XRAY_CONFIG"
-
-    echo
-}
-
-
-# ============================================================
-# 查看客户端信息
-# ============================================================
-
-show_client_info() {
-
-    if [ ! -f "$XRAY_INFO" ]; then
-
-        warn "没有找到客户端信息"
-
-        return
+    if systemctl is-active --quiet xray; then
+        msg "Xray 重启成功。"
+    else
+        error "Xray 重启失败。"
+        systemctl status xray --no-pager -l || true
     fi
 
-    echo
-
-    cat "$XRAY_INFO"
-
-    echo
+    pause
 }
 
-
-# ============================================================
-# 卸载
-# ============================================================
+# ------------------------------------------------------------
+# Uninstall
+# ------------------------------------------------------------
 
 uninstall_xray() {
 
     echo
-
-    warn "此操作将卸载 Xray。"
-
-    echo "配置文件默认不会主动删除。"
-
+    echo "============================================================"
+    echo " 卸载 Xray"
+    echo "============================================================"
     echo
 
-    read -rp "确认卸载？请输入 YES： " answer
+    warn "这将停止并卸载 Xray。"
+    warn "配置文件默认不会立即删除。"
+    echo
 
-    if [ "$answer" != "YES" ]; then
+    read -r -p "确定卸载？请输入 YES: " confirm
 
-        echo "已取消"
-
+    if [ "$confirm" != "YES" ]; then
+        echo "取消。"
+        pause
         return
     fi
 
-    systemctl stop xray 2>/dev/null || true
+    systemctl stop xray >/dev/null 2>&1 || true
+    systemctl disable xray >/dev/null 2>&1 || true
 
-    systemctl disable xray 2>/dev/null || true
+    if [ -x "$XRAY_BIN" ]; then
 
-    bash -c "$(curl -fsSL "$INSTALL_SCRIPT_URL")" @ remove || true
+        bash <(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh) remove
 
-    success "Xray 已卸载"
-
-    echo
-
-    echo "配置仍保留在："
-    echo "  ${XRAY_DIR}"
-}
-
-
-# ============================================================
-# 安装主流程
-# ============================================================
-
-install_main() {
-
-    clear
-
-    echo "============================================================"
-    echo " Xray VLESS + REALITY + XTLS Vision"
-    echo "============================================================"
-
-    echo
-
-    check_root
-
-    check_os
-
-    check_commands
-
-    install_xray
-
-    echo
-
-    echo "============================================================"
-    echo "生成 VLESS + REALITY + Vision 配置"
-    echo "============================================================"
-
-    get_server_ip
-
-    echo
-
-    echo "服务器 IP：${SERVER_IP}"
-
-    input_port
-
-    input_reality_dest
-
-    input_server_name
-
-    input_fingerprint
-
-    echo
-
-    info "生成 UUID..."
-
-    UUID="$(generate_uuid)"
-
-    if [ -z "$UUID" ]; then
-        die "UUID 生成失败"
     fi
 
-    success "UUID：${UUID}"
+    systemctl daemon-reload
+
+    msg "Xray 已卸载。"
 
     echo
+    echo "配置目录仍可能存在："
+    echo "$XRAY_DIR"
 
-    generate_reality_keys
-
-    echo
-
-    generate_short_id
-
-    echo
-
-    create_config
-
-    echo
-
-    test_config
-
-    echo
-
-    configure_firewall
-
-    echo
-
-    restart_xray
-
-    echo
-
-    generate_vless_link
-
-    save_info
-
-    show_result
-
-    pause_enter
-
-    install_menu
+    pause
 }
 
+# ------------------------------------------------------------
+# Repair permissions
+# ------------------------------------------------------------
 
-# ============================================================
-# 菜单
-# ============================================================
-
-install_menu() {
-
-    clear
-
-    echo "============================================================"
-    echo " Xray VLESS + REALITY + XTLS Vision"
-    echo "============================================================"
+repair_permissions() {
 
     echo
-
-    echo "1. 安装 / 重装"
-    echo "2. 查看状态"
-    echo "3. 查看配置"
-    echo "4. 重启 Xray"
-    echo "5. 查看客户端参数"
-    echo "6. 查看 Xray 日志"
-    echo "7. 卸载 Xray"
-    echo "0. 退出"
-
+    echo "============================================================"
+    echo " 修复 Xray 权限"
+    echo "============================================================"
     echo
 
-    read -rp "请选择 [0-7]： " MENU
+    fix_xray_permissions
 
-    case "$MENU" in
+    msg "权限修复完成。"
 
-        1)
+    echo
+    info "测试配置："
 
-            install_main
+    "$XRAY_BIN" run -test -config "$XRAY_CONFIG" || true
 
-            ;;
-
-        2)
-
-            show_status
-
-            pause_enter
-
-            install_menu
-
-            ;;
-
-        3)
-
-            show_config
-
-            pause_enter
-
-            install_menu
-
-            ;;
-
-        4)
-
-            systemctl restart xray
-
-            success "Xray 已重启"
-
-            show_status
-
-            pause_enter
-
-            install_menu
-
-            ;;
-
-        5)
-
-            show_client_info
-
-            pause_enter
-
-            install_menu
-
-            ;;
-
-        6)
-
-            echo
-
-            journalctl \
-                -u xray \
-                -n 100 \
-                --no-pager ||
-                true
-
-            pause_enter
-
-            install_menu
-
-            ;;
-
-        7)
-
-            uninstall_xray
-
-            pause_enter
-
-            install_menu
-
-            ;;
-
-        0)
-
-            exit 0
-
-            ;;
-
-        *)
-
-            warn "无效选项"
-
-            sleep 1
-
-            install_menu
-
-            ;;
-
-    esac
+    pause
 }
 
+# ------------------------------------------------------------
+# Menu
+# ------------------------------------------------------------
 
-# ============================================================
-# 命令行模式
-# ============================================================
+show_menu() {
+
+    clear 2>/dev/null || true
+
+    echo
+    echo "============================================================"
+    echo "        Xray VLESS + REALITY + XTLS Vision"
+    echo "============================================================"
+    echo
+    echo " Xray: $XRAY_BIN"
+    echo " Config: $XRAY_CONFIG"
+    echo
+
+    if [ -x "$XRAY_BIN" ]; then
+
+        "$XRAY_BIN" version 2>/dev/null | head -n 1
+
+    else
+
+        echo "Xray: 未安装"
+
+    fi
+
+    echo
+    echo "------------------------------------------------------------"
+    echo
+    echo " 1. 安装 / 重装 VLESS + REALITY"
+    echo " 2. 查看 Xray 状态"
+    echo " 3. 查看 Xray 配置"
+    echo " 4. 查看客户端参数"
+    echo " 5. 重启 Xray"
+    echo " 6. 查看 Xray 日志"
+    echo " 7. 修复配置权限"
+    echo " 8. 卸载 Xray"
+    echo " 0. 退出"
+    echo
+    echo "------------------------------------------------------------"
+    echo
+}
+
+# ------------------------------------------------------------
+# Main
+# ------------------------------------------------------------
 
 main() {
 
-    check_root
+    require_root
 
-    if [ "$#" -gt 0 ]; then
+    while true; do
 
-        case "$1" in
+        show_menu
 
-            install)
+        read -r -p "请选择 [0-8]: " choice
 
-                install_main
+        case "$choice" in
 
+            1)
+                install_complete
+                pause
                 ;;
 
-            status)
-
+            2)
                 show_status
-
                 ;;
 
-            config)
-
+            3)
                 show_config
-
                 ;;
 
-            info)
-
-                show_client_info
-
+            4)
+                show_client
                 ;;
 
-            restart)
-
-                systemctl restart xray
-
-                success "Xray 已重启"
-
+            5)
+                restart_xray
                 ;;
 
-            logs)
-
-                journalctl \
-                    -u xray \
-                    -n 100 \
-                    --no-pager
-
+            6)
+                show_logs
                 ;;
 
-            uninstall)
+            7)
+                repair_permissions
+                ;;
 
+            8)
                 uninstall_xray
+                ;;
 
+            0)
+                echo
+                echo "退出。"
+                exit 0
                 ;;
 
             *)
-
-                echo
-                echo "用法："
-                echo
-                echo "  $0"
-                echo "  $0 install"
-                echo "  $0 status"
-                echo "  $0 config"
-                echo "  $0 info"
-                echo "  $0 restart"
-                echo "  $0 logs"
-                echo "  $0 uninstall"
-                echo
-
+                warn "无效选择，请输入 0-8。"
+                sleep 1
                 ;;
 
         esac
 
-    else
-
-        install_menu
-
-    fi
+    done
 }
-
-
-# ============================================================
-# Start
-# ============================================================
 
 main "$@"
